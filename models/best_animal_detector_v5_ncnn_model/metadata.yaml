@@ -1,0 +1,18 @@
+description: Ultralytics YOLO26n model trained on /content/dataset/data/data_v5.yaml
+author: Ultralytics
+date: '2026-04-17T12:28:38.200955'
+version: 8.3.240
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: Animal
+args:
+  batch: 1
+  half: false
+channels: 3

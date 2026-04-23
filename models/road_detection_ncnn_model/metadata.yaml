@@ -1,0 +1,19 @@
+description: Ultralytics YOLOv8s-seg model trained on /content/road_data/data_r.yaml
+author: Ultralytics
+date: '2026-04-17T12:28:44.621146'
+version: 8.3.240
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: segment
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: object
+  1: road
+args:
+  batch: 1
+  half: false
+channels: 3

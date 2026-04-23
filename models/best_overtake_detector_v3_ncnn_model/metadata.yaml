@@ -1,0 +1,23 @@
+description: Ultralytics YOLO26n model trained on /content/overtake_data_v3.yaml
+author: Ultralytics
+date: '2026-04-17T12:28:51.552291'
+version: 8.3.240
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: divider-line
+  1: dotted-line
+  2: double-line
+  3: random-line
+  4: road-sign-line
+  5: solid-line
+args:
+  batch: 1
+  half: false
+channels: 3

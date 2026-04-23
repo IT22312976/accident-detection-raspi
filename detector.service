@@ -1,0 +1,23 @@
+[Unit]
+Description=Dual-camera YOLO detection daemon (road/animal/overtake + TWS)
+After=network.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__PYTHON__ __WORKDIR__/app.py
+Environment=CAM_MAIN_INDEX=0
+Environment=CAM_TWS_INDEX=2
+# ALSA output device. Find cards with `aplay -l` on the Pi and set accordingly:
+#   plughw:0,0 = HDMI 0, plughw:1,0 = 3.5mm jack (typical), plughw:2,0 = USB DAC.
+# plughw: (not hw:) lets ALSA resample to match the hardware's sample rate.
+Environment=AUDIO_DEVICE=plughw:1,0
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
