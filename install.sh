@@ -14,20 +14,49 @@ RUN_USER="${SUDO_USER:-$USER}"
 
 # Use the pre-created venv's Python (so the service has ultralytics/cv2/ncnn).
 # systemd runs the binary directly — it does NOT need the venv activated, just
-# the absolute path to the venv's python.
+# the absolute path to the venv's python. Pointing ExecStart at <venv>/bin/python
+# is equivalent to `source activate` for the child process's module resolution.
 #
 # Resolution order for the venv:
 #   1. VENV_DIR env var (explicit override)
-#   2. ${WORKDIR}/myenv            (venv inside the project)
-#   3. /home/${RUN_USER}/AP/myenv  (shared venv outside the project)
+#   2. A few well-known default paths (fast check, no disk scan)
+#   3. Auto-discover: find any directory named `myenv` that looks like a venv
+#      (contains bin/python) under common roots.
+RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+RUN_HOME="${RUN_HOME:-/home/${RUN_USER}}"
+
+is_venv() { [[ -x "$1/bin/python" ]]; }
+
 if [[ -z "${VENV_DIR:-}" ]]; then
-  if [[ -d "${WORKDIR}/myenv" ]]; then
-    VENV_DIR="${WORKDIR}/myenv"
-  elif [[ -d "/home/${RUN_USER}/AP/myenv" ]]; then
-    VENV_DIR="/home/${RUN_USER}/AP/myenv"
-  else
-    VENV_DIR="${WORKDIR}/myenv"  # will fall through to the error check below
-  fi
+  # Fast path: check the common locations first.
+  for candidate in \
+    "${WORKDIR}/myenv" \
+    "${RUN_HOME}/AP/myenv" \
+    "${RUN_HOME}/myenv" \
+    "/opt/myenv"
+  do
+    if is_venv "$candidate"; then
+      VENV_DIR="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "${VENV_DIR:-}" ]]; then
+  # Fallback: search common roots for any `myenv` directory that looks like a venv.
+  echo "Searching for 'myenv' virtual environment..." >&2
+  SEARCH_ROOTS=("$WORKDIR" "$RUN_HOME" "/opt" "/srv" "/home")
+  while IFS= read -r -d '' found; do
+    if is_venv "$found"; then
+      VENV_DIR="$found"
+      echo "Found venv at: $VENV_DIR" >&2
+      break
+    fi
+  done < <(find "${SEARCH_ROOTS[@]}" -maxdepth 5 -type d -name myenv -print0 2>/dev/null)
+fi
+
+if [[ -z "${VENV_DIR:-}" ]]; then
+  VENV_DIR="${WORKDIR}/myenv"  # will fall through to the error check below
 fi
 PYTHON_BIN="${VENV_DIR}/bin/python"
 
@@ -42,9 +71,11 @@ if [[ ! -f "$TEMPLATE" ]]; then
 fi
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "ERROR: venv Python not found at $PYTHON_BIN" >&2
+  echo "ERROR: could not locate a 'myenv' virtual environment." >&2
+  echo "Searched: \$VENV_DIR, ${WORKDIR}/myenv, ${RUN_HOME}/AP/myenv, ${RUN_HOME}/myenv, /opt/myenv," >&2
+  echo "         and any 'myenv' dir under ${WORKDIR}, ${RUN_HOME}, /opt, /srv, /home (depth 5)." >&2
   echo "Fix one of:" >&2
-  echo "  (a) point VENV_DIR at your venv:  sudo VENV_DIR=/home/${RUN_USER}/AP/myenv ./install.sh" >&2
+  echo "  (a) point VENV_DIR at your venv:  sudo VENV_DIR=/path/to/myenv ./install.sh" >&2
   echo "  (b) create the venv at the default path:" >&2
   echo "        cd $WORKDIR && python3 -m venv myenv && source myenv/bin/activate && pip install -r requirements.txt" >&2
   exit 1
