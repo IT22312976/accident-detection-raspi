@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Install the detection daemon as a systemd service so it autostarts on boot.
-# Run this ONCE on the Raspberry Pi, from the project directory:
-#     cd /home/pi/AP.HTTP
+# Run this on the Raspberry Pi FROM THE DIRECTORY CONTAINING app.py. Example:
+#     cd /home/accidentsystem/Desktop/accident-detection-raspi
 #     sudo ./install.sh
+# WORKDIR below is derived from install.sh's own location, so running it from
+# the wrong folder bakes wrong paths into /etc/systemd/system/detector.service
+# and the service crash-loops with status=203/EXEC on next boot.
 set -euo pipefail
 
 SERVICE_NAME="detector.service"
