@@ -81,11 +81,33 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
+# Pre-flight: app.py must be next to install.sh, otherwise systemd would bake a
+# WorkingDirectory that doesn't contain the script (status=203/EXEC at boot).
+if [[ ! -f "${WORKDIR}/app.py" ]]; then
+  echo "ERROR: app.py not found at ${WORKDIR}/app.py" >&2
+  echo "       You are running install.sh from the wrong directory. cd into the" >&2
+  echo "       folder that contains app.py and re-run." >&2
+  exit 1
+fi
+
+# Pre-flight: the discovered venv must actually have the runtime deps, otherwise
+# the service will crash-loop on `ModuleNotFoundError` after install.
+echo "Verifying venv has required packages..."
+if ! "$PYTHON_BIN" -c "import ultralytics, cv2, numpy" >/dev/null 2>&1; then
+  echo "ERROR: venv at ${VENV_DIR} is missing required packages." >&2
+  echo "       '${PYTHON_BIN} -c \"import ultralytics, cv2, numpy\"' failed." >&2
+  echo "       Install deps into this venv:" >&2
+  echo "         source ${VENV_DIR}/bin/activate && pip install -r ${WORKDIR}/requirements.txt" >&2
+  echo "       Or point VENV_DIR at a different venv and re-run." >&2
+  exit 1
+fi
+
 echo "Installing $SERVICE_NAME:"
 echo "  User        = $RUN_USER"
 echo "  WorkingDir  = $WORKDIR"
 echo "  VenvDir     = $VENV_DIR"
 echo "  Python      = $PYTHON_BIN"
+echo "  App         = ${WORKDIR}/app.py"
 echo
 
 sed \
@@ -100,12 +122,16 @@ chmod 644 "$TARGET"
 usermod -aG video,audio "$RUN_USER" || true
 
 systemctl daemon-reload
+# Reset the restart counter so a previous crash-loop doesn't leave the unit in a
+# `start-limit-hit` state after we've fixed the underlying issue.
+systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 echo
-echo "Installed. Useful commands:"
+echo "Installed. Verify it's actually running:"
 echo "  sudo systemctl status  $SERVICE_NAME"
 echo "  sudo journalctl -u $SERVICE_NAME -f"
+echo "    (look for '[BOOT] venv_active= True' as proof the venv is loaded)"
 echo "  sudo systemctl restart $SERVICE_NAME"
 echo "  sudo systemctl disable $SERVICE_NAME   # to stop autostart"

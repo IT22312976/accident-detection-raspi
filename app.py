@@ -311,5 +311,12 @@ def run_headless_daemon():
 
 
 if __name__ == "__main__":
+    # Surface runtime context in the journal so `journalctl -u detector.service`
+    # proves the venv is active and paths are correct without needing to attach
+    # a debugger. If sys.prefix equals sys.base_prefix, no venv is in effect.
+    print(f"[BOOT] python     = {sys.executable}", flush=True)
+    print(f"[BOOT] sys.prefix = {sys.prefix}", flush=True)
+    print(f"[BOOT] venv_active= {sys.prefix != sys.base_prefix}", flush=True)
+    print(f"[BOOT] cwd        = {os.getcwd()}", flush=True)
     setup_models()
     run_headless_daemon()
