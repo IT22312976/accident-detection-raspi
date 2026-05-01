@@ -15,6 +15,51 @@ import subprocess
 import platform
 import signal
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
+
+
+# Logs go to stdout (captured by systemd → `journalctl -u detector.service -f`)
+# and to a rotating file at ./logs/detector.log so anyone can tail them without
+# root. Override level with LOG_LEVEL=DEBUG, location with LOG_DIR=/path.
+LOG_DIR = os.environ.get(
+    "LOG_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"),
+)
+LOG_FILE = os.path.join(LOG_DIR, "detector.log")
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+def setup_logging():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(threadName)-9s | %(name)-9s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    root = logging.getLogger()
+    root.setLevel(LOG_LEVEL)
+    root.handlers.clear()
+
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(fmt)
+    root.addHandler(stream)
+
+    fileh = RotatingFileHandler(
+        LOG_FILE, maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+    )
+    fileh.setFormatter(fmt)
+    root.addHandler(fileh)
+
+    logging.getLogger("ultralytics").setLevel(logging.WARNING)
+
+
+setup_logging()
+log_boot = logging.getLogger("BOOT")
+log_speaker = logging.getLogger("SPEAKER")
+log_detect = logging.getLogger("DETECT")
+log_models = logging.getLogger("MODELS")
+log_stream = logging.getLogger("STREAM")
+log_daemon = logging.getLogger("DAEMON")
 
 
 # Use aplay on Linux (ALSA, talks directly to /dev/snd/* — no user session
@@ -53,23 +98,24 @@ class AudioAlerter:
 
             audio_file = f"./audio/{alert_class}.wav"
             if os.path.exists(audio_file):
-                print(
-                    f"[SPEAKER] Currently playing aloud: {audio_file} (Priority {priority})"
+                log_speaker.info(
+                    "Playing %s (priority=%s)", audio_file, priority
                 )
                 try:
                     cmd = _build_audio_cmd(audio_file)
                     result = subprocess.run(cmd, capture_output=True, text=True)
                     if result.returncode != 0:
-                        print(
-                            f"[SPEAKER] ERROR playing {audio_file} via {cmd[0]}: "
-                            f"rc={result.returncode} stderr={result.stderr.strip()}"
+                        log_speaker.error(
+                            "Failed to play %s via %s: rc=%s stderr=%s",
+                            audio_file, cmd[0], result.returncode,
+                            result.stderr.strip(),
                         )
                 except FileNotFoundError as e:
-                    print(f"[SPEAKER] ERROR: audio player not installed: {e}")
+                    log_speaker.error("Audio player not installed: %s", e)
                 except Exception as e:
-                    print(f"[SPEAKER] ERROR: {e}")
+                    log_speaker.exception("Audio playback failed: %s", e)
             else:
-                print(f"[SPEAKER] WARNING: audio file not found: {audio_file}")
+                log_speaker.warning("Audio file not found: %s", audio_file)
             self.q.task_done()
 
     def queue_alert(self, alert_class):
@@ -79,8 +125,8 @@ class AudioAlerter:
             if now - self.last_played[alert_class] < self.cooldown:
                 return  # Skip to avoid spam/loop
 
-        print(
-            f"[DETECTION] 🚨 Detected threat: {alert_class}! Triggering audio system..."
+        log_detect.warning(
+            "🚨 Detected threat: %s — triggering audio system", alert_class
         )
         self.last_played[alert_class] = now
 
@@ -128,14 +174,16 @@ def setup_models():
 
         if os.path.exists(path_to_load):
             try:
-                print(f"Loading {model_name} model from {path_to_load}...")
+                log_models.info("Loading %s model from %s ...", model_name, path_to_load)
                 task_type = "segment" if model_name == "road" else "detect"
                 models[model_name] = YOLO(path_to_load, task=task_type)
-                print(f"{model_name} model loaded successfully.")
+                log_models.info("%s model loaded successfully", model_name)
             except Exception as e:
-                print(f"Failed to load {model_name} model from {path_to_load}: {e}")
+                log_models.exception(
+                    "Failed to load %s model from %s: %s", model_name, path_to_load, e
+                )
         else:
-            print(f"Model file {path_to_load} not found.")
+            log_models.error("Model file not found: %s", path_to_load)
 
 
 def run_stream(cam_index, model_names, apply_road_mask, stream_label, stop_event):
@@ -144,11 +192,13 @@ def run_stream(cam_index, model_names, apply_road_mask, stream_label, stop_event
     Cam A uses {road, animal, overtake} with road_mask filtering; cam B uses {tws} alone.
     These subsets are disjoint, so no shared YOLO object is invoked from both threads.
     """
-    print(f"[{stream_label}] Opening camera at index {cam_index}...")
+    log_stream.info("[%s] Opening camera at index %s ...", stream_label, cam_index)
     cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
 
     if not cap.isOpened():
-        print(f"[{stream_label}] ERROR: Failed to open camera at index {cam_index}.")
+        log_stream.error(
+            "[%s] Failed to open camera at index %s", stream_label, cam_index
+        )
         return
 
     # Force MJPEG + low resolution. Two USB cams on a Pi 4 share one USB 2.0
@@ -163,7 +213,7 @@ def run_stream(cam_index, model_names, apply_road_mask, stream_label, stop_event
 
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[{stream_label}] Negotiated {actual_w}x{actual_h}")
+    log_stream.info("[%s] Negotiated %sx%s", stream_label, actual_w, actual_h)
 
     # Enforce 6 FPS logic per stream
     video_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -179,13 +229,18 @@ def run_stream(cam_index, model_names, apply_road_mask, stream_label, stop_event
     else:
         target_models_sorted = list(model_names)
 
-    print(f"[{stream_label}] Active. Models: {target_models_sorted} @ {target_fps} FPS")
+    log_stream.info(
+        "[%s] Active — models=%s @ %s FPS",
+        stream_label, target_models_sorted, target_fps,
+    )
 
     try:
         while not stop_event.is_set():
             ret, frame = cap.read()
             if not ret:
-                print(f"[{stream_label}] Stream disconnected or lost. Waiting...")
+                log_stream.warning(
+                    "[%s] Stream disconnected or lost — waiting", stream_label
+                )
                 time.sleep(1)
                 continue
 
@@ -266,18 +321,18 @@ def run_stream(cam_index, model_names, apply_road_mask, stream_label, stop_event
 
     finally:
         cap.release()
-        print(f"[{stream_label}] Camera released.")
+        log_stream.info("[%s] Camera released", stream_label)
 
 
 def run_headless_daemon():
     """Spawn one detection thread per USB camera and orchestrate clean shutdown."""
-    print("Initiating dual-camera stream daemon...")
+    log_daemon.info("Initiating dual-camera stream daemon")
 
     # Audible confirmation that models are loaded and detection is starting.
     audio_alerter.queue_alert("startup")
 
     def _shutdown(sig, frame):
-        print("\n[OS INTERRUPT] Shutdown signal; stopping both camera streams...")
+        log_daemon.info("Shutdown signal %s received — stopping camera streams", sig)
         _stop_event.set()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -301,22 +356,25 @@ def run_headless_daemon():
         _stop_event.wait(timeout=0.5)
         # Exit if both workers have died so systemd can restart the service.
         if not t_main.is_alive() and not t_tws.is_alive():
-            print("[DAEMON] Both camera streams exited. Shutting down for systemd to restart.")
+            log_daemon.error(
+                "Both camera streams exited — shutting down for systemd to restart"
+            )
             _stop_event.set()
 
     t_main.join(timeout=5)
     t_tws.join(timeout=5)
-    print("[SHUTDOWN] Both streams released.")
+    log_daemon.info("Both streams released — exiting")
     sys.exit(0)
 
 
 if __name__ == "__main__":
-    # Surface runtime context in the journal so `journalctl -u detector.service`
-    # proves the venv is active and paths are correct without needing to attach
-    # a debugger. If sys.prefix equals sys.base_prefix, no venv is in effect.
-    print(f"[BOOT] python     = {sys.executable}", flush=True)
-    print(f"[BOOT] sys.prefix = {sys.prefix}", flush=True)
-    print(f"[BOOT] venv_active= {sys.prefix != sys.base_prefix}", flush=True)
-    print(f"[BOOT] cwd        = {os.getcwd()}", flush=True)
+    # Surface runtime context so `journalctl -u detector.service` and
+    # ./logs/detector.log prove the venv is active and paths are correct
+    # without attaching a debugger.
+    log_boot.info("python      = %s", sys.executable)
+    log_boot.info("sys.prefix  = %s", sys.prefix)
+    log_boot.info("venv_active = %s", sys.prefix != sys.base_prefix)
+    log_boot.info("cwd         = %s", os.getcwd())
+    log_boot.info("log_file    = %s (level=%s)", LOG_FILE, LOG_LEVEL)
     setup_models()
     run_headless_daemon()
