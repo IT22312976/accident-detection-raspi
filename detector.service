@@ -13,7 +13,7 @@ Environment=CAM_TWS_INDEX=2
 # ALSA output device. Find cards with `aplay -l` on the Pi and set accordingly:
 #   plughw:0,0 = HDMI 0, plughw:1,0 = 3.5mm jack (typical), plughw:2,0 = USB DAC.
 # plughw: (not hw:) lets ALSA resample to match the hardware's sample rate.
-Environment=AUDIO_DEVICE=plughw:1,0
+Environment=AUDIO_DEVICE=plughw:2,0
 Restart=always
 RestartSec=5
 StandardOutput=journal
